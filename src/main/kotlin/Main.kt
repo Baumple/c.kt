@@ -1,6 +1,3 @@
-import arrow.core.Either
-import arrow.core.Option
-import arrow.core.Some
 import java.io.File
 import kotlin.system.exitProcess
 
@@ -14,78 +11,124 @@ enum class TokenType {
     TOKEN_NUMBER,
     TOKEN_STRING,
     TOKEN_RETURN,
+    TOKEN_SCOLON,
 }
 
 data class Loc(val fileName: String, val row: Int, val col: Int) {
-    override fun toString(): String = "$fileName:$row:$col"
+    override fun toString(): String = "$fileName:${row + 1}:${col + 1}"
 }
 
-data class Token(val type: TokenType, val text: String, val loc: Loc)
+data class Token(val type: TokenType, val value: String, val loc: Loc)
 
 class Lexer(val sourceName: String, val source: String) {
-    var cur = 0
-    var bol = 0
-    var row = 0
-
+    private var cur = 0
+    private var bol = 0
+    private var row = 0
+    
     fun hasNext() = cur < source.length
-
-    fun chopChar() {
+    
+    private fun chopChar() {
         if (hasNext()) {
-            val x = source[cur]
+            val c = source[cur]
             cur += 1
-
-            if (x == '\n') {
-                this.bol = cur
-                this.row += 1
-
+            
+            if (c == '\n') {
+                bol = cur
+                row += 1
             }
         }
     }
-
-    fun trimLeft() {
-        while (this.hasNext() && this.source[cur].isWhitespace()) {
-            this.chopChar()
+    
+    private fun trimLeft() {
+        while (hasNext() && source[cur].isWhitespace()) {
+            chopChar()
         }
     }
-
+    
     fun curLoc(): Loc {
-        return Loc(this.sourceName, this.cur, this.row)
+        return Loc(sourceName, row, cur - bol)
     }
-
+    
     fun nextToken(): Token? {
-        this.trimLeft()
-        while (this.hasNext() && this.source[cur] == '#') {
-            this.dropLine()
-            this.trimLeft()
+        trimLeft()
+        while (hasNext() && source[cur] == '#') {
+            dropLine()
+            trimLeft()
         }
-
-        if (!this.hasNext()) {
+        
+        if (!hasNext()) {
             return null
         }
-
-        if (this.source[cur].isAlpha()) {
+        
+        val loc = curLoc()
+        val firstc = source[cur]
+        
+        if (firstc.isLetter()) {
             val index = cur
-            while (this.hasNext() and this.source[cur].isAlpha()) {
-                this.chopChar()
+            while (hasNext() && source[cur].isLetterOrDigit()) {
+                chopChar()
             }
-
-            return Token(TokenType.TOKEN_NAME, source.slice(index until cur), curLoc())
+            return Token(TokenType.TOKEN_NAME, source.slice(index until cur), loc)
         }
-
-        // todo("nextToken")
+        
+        val type = when (firstc) {
+            '(' -> TokenType.TOKEN_OPAREN
+            ')' -> TokenType.TOKEN_CPAREN
+            '{' -> TokenType.TOKEN_OCURLY
+            '}' -> TokenType.TOKEN_CCURLY
+            ';' -> TokenType.TOKEN_SCOLON
+            else -> null
+        }
+        if (type != null) {
+            chopChar()
+            return Token(type, firstc.toString(), loc)
+        }
+        
+        if (firstc == '"') {
+            chopChar()
+            val start = cur
+            while (hasNext() && source[cur] != '"') {
+                chopChar()
+            }
+            if (hasNext()) {
+                val text = source.slice(start until cur)
+                chopChar()
+                return Token(TokenType.TOKEN_STRING, text, loc)
+            }
+            
+            println("ERROR: Unclosed String literal at ${Loc(sourceName, row, start - bol)}")
+            return null
+        }
+        
+        if (firstc.isDigit()) {
+            val start = cur
+            
+            chopChar()
+            while (hasNext() && source[cur].isDigit()) {
+                chopChar()
+            }
+            
+            val text = source.slice(start until cur)
+            chopChar()
+            
+            return Token(TokenType.TOKEN_NUMBER, text, loc)
+        }
+        
+        TODO("nextToken: $loc")
         return null
     }
-
+    
     private fun dropLine() {
-        while (this.hasNext() && this.source[cur] != '\n') {
-            this.chopChar()
+        while (hasNext() && source[cur] != '\n') {
+            chopChar()
         }
-
-        if (!this.hasNext()) this.chopChar()
+        
+        if (!hasNext()) chopChar()
     }
-
+    
     companion object Builder {
         fun fromFile(fileName: String) = Lexer(fileName, File(fileName).readText())
+        fun fromFile(file: File) = Lexer(file.name, file.readText())
     }
 }
 
@@ -93,31 +136,70 @@ fun test() {
     exitProcess(0)
 }
 
+enum class StatementType {
+    STMT_FUNCALL,
+    STMT_RETURN
+}
+
+
+class FuncallStmt : Statement {
+
+}
+
+class RetStmt : Statement {
+
+}
+
+interface Statement {
+
+}
+
+class Func(val name: String, val body: List<Statement>) {
+
+}
+
+enum class Type {
+    TYPE_INT,
+}
+
+fun expect_token(lexer: Lexer, tokenType: TokenType): Token? {
+    val token = lexer.nextToken()
+    
+    if (token == null) {
+        println("ERROR: Expected $tokenType but got EOF: ${lexer.curLoc()}")
+        
+        return null
+    }
+    
+    if (token.type != tokenType) {
+        println("ERROR: Expected '$tokenType' but got EOF: ${lexer.curLoc()}")
+    }
+    
+    return token
+}
+
+fun parseType(lexer: Lexer): Type? {
+    val returnType = expect_token(lexer, TokenType.TOKEN_NAME) ?: return null
+    
+    if (returnType.value != "int") {
+        println("Unexpected type ${returnType.value} at ${lexer.curLoc()}")
+        return null
+    }
+    
+    return Type.TYPE_INT
+}
+
+fun parse_function(lexer: Lexer): Token? {
+    val returnType = parseType(lexer)
+    
+    return null
+}
+
 fun main() {
     // test()
     val fileName = "hello.c"
     val lexer = Lexer.fromFile(fileName)
-
-    println("Size of file: ${lexer.source.length}")
-
-    var token = lexer.nextToken()
-
-    while (token != null) {
-        println(token)
-        println(token.loc)
-        token = lexer.nextToken()
-    }
-
+    
+    val func = parse_function(lexer)
 }
 
-fun todo(what: String) {
-    error("TODO: $what not yet implemented")
-}
-
-fun Char.isAlpha(): Boolean {
-    return !(this !in 'A'..'Z' && this !in 'a'..'z' && this !in '0'..'9')
-}
-fun<T> dbg(x: T): T {
-    println(x)
-    return x
-}

@@ -1,24 +1,26 @@
 import java.io.File
+import java.io.IOException
 import kotlin.system.exitProcess
 
-
 enum class TokenType {
-    TOKEN_NAME,
-    TOKEN_OPAREN,
-    TOKEN_CPAREN,
-    TOKEN_OCURLY,
-    TOKEN_CCURLY,
-    TOKEN_NUMBER,
-    TOKEN_STRING,
-    TOKEN_RETURN,
-    TOKEN_SCOLON,
+    TOKEN_NAME, TOKEN_OPAREN, TOKEN_CPAREN, TOKEN_OCURLY, TOKEN_CCURLY, TOKEN_NUMBER, TOKEN_STRING, TOKEN_RETURN, TOKEN_SCOLON, TOKEN_COMMA, ;
+    
 }
 
 data class Loc(val fileName: String, val row: Int, val col: Int) {
     override fun toString(): String = "$fileName:${row + 1}:${col + 1}"
 }
 
-data class Token(val type: TokenType, val value: String, val loc: Loc)
+data class Token(val type: TokenType, val value: String, val loc: Loc) {
+    /// Turns type into corrected formatted string
+    fun valueToString(): String {
+        return when (this.type) {
+            TokenType.TOKEN_NUMBER -> this.value
+            TokenType.TOKEN_STRING -> "\"${this.value}\""
+            else -> error("")
+        }
+    }
+}
 
 class Lexer(val sourceName: String, val source: String) {
     private var cur = 0
@@ -68,7 +70,10 @@ class Lexer(val sourceName: String, val source: String) {
             while (hasNext() && source[cur].isLetterOrDigit()) {
                 chopChar()
             }
-            return Token(TokenType.TOKEN_NAME, source.slice(index until cur), loc)
+            val text = source.slice(index until cur)
+            if (text == "return") return Token(TokenType.TOKEN_RETURN, text, loc)
+            
+            return Token(TokenType.TOKEN_NAME, text, loc)
         }
         
         val type = when (firstc) {
@@ -77,6 +82,7 @@ class Lexer(val sourceName: String, val source: String) {
             '{' -> TokenType.TOKEN_OCURLY
             '}' -> TokenType.TOKEN_CCURLY
             ';' -> TokenType.TOKEN_SCOLON
+            ',' -> TokenType.TOKEN_COMMA
             else -> null
         }
         if (type != null) {
@@ -109,12 +115,10 @@ class Lexer(val sourceName: String, val source: String) {
             }
             
             val text = source.slice(start until cur)
-            chopChar()
             
             return Token(TokenType.TOKEN_NUMBER, text, loc)
         }
         
-        TODO("nextToken: $loc")
         return null
     }
     
@@ -132,74 +136,158 @@ class Lexer(val sourceName: String, val source: String) {
     }
 }
 
-fun test() {
-    exitProcess(0)
+interface Statement {
+    val type: StatementType
+    override fun toString(): String
 }
 
 enum class StatementType {
-    STMT_FUNCALL,
-    STMT_RETURN
+    Funcall, Return
 }
 
-
-class FuncallStmt : Statement {
-
+class FuncallStmt(val name: Token, val args: List<Token>) : Statement {
+    override val type: StatementType = StatementType.Funcall
+    override fun toString(): String = "name: '$name', number_of_args: ${args.size}"
 }
 
-class RetStmt : Statement {
-
-}
-
-interface Statement {
-
+class RetStmt(val expr: Token) : Statement {
+    override val type: StatementType = StatementType.Return
+    override fun toString(): String = "return statement: $expr "
 }
 
 class Func(val name: String, val body: List<Statement>) {
-
+    override fun toString(): String = "name='$name', number_of_statements: ${body.size}"
 }
 
 enum class Type {
     TYPE_INT,
 }
 
-fun expect_token(lexer: Lexer, tokenType: TokenType): Token? {
+fun expectToken(lexer: Lexer, vararg expectedTokens: TokenType): Token? {
     val token = lexer.nextToken()
     
     if (token == null) {
-        println("ERROR: Expected $tokenType but got EOF: ${lexer.curLoc()}")
-        
+        println("ERROR: Expected one of the following tokens: ${expectedTokens.map { it.toString() }} but got EOF ${lexer.curLoc()}")
         return null
     }
     
-    if (token.type != tokenType) {
-        println("ERROR: Expected '$tokenType' but got EOF: ${lexer.curLoc()}")
+    if (token.type !in expectedTokens) {
+        println("${token.loc} ERROR: Expected '${expectedTokens.map { it.toString() }}' but got ${token.type}:'${token.value}'")
     }
     
     return token
 }
 
 fun parseType(lexer: Lexer): Type? {
-    val returnType = expect_token(lexer, TokenType.TOKEN_NAME) ?: return null
+    val returnType = expectToken(lexer, TokenType.TOKEN_NAME) ?: return null
     
     if (returnType.value != "int") {
-        println("Unexpected type ${returnType.value} at ${lexer.curLoc()}")
+        println("Unexpected type '${returnType.value}' at ${lexer.curLoc()}")
         return null
     }
     
     return Type.TYPE_INT
 }
 
-fun parse_function(lexer: Lexer): Token? {
-    val returnType = parseType(lexer)
+
+fun parseFunction(lexer: Lexer): Func? {
+    val returnType = parseType(lexer) ?: return null
+    assert(returnType == Type.TYPE_INT)
     
-    return null
+    val name = expectToken(lexer, TokenType.TOKEN_NAME) ?: return null
+    
+    expectToken(lexer, TokenType.TOKEN_OPAREN) ?: return null
+    expectToken(lexer, TokenType.TOKEN_CPAREN) ?: return null
+    
+    val body = parseBody(lexer) ?: return null
+    return Func(name.value, body)
+}
+
+fun parseBody(lexer: Lexer): List<Statement>? {
+    expectToken(lexer, TokenType.TOKEN_OCURLY) ?: return null
+    
+    val block = mutableListOf<Statement>()
+    
+    while (true) {
+        val name = expectToken(
+            lexer,
+            TokenType.TOKEN_RETURN,
+            TokenType.TOKEN_NAME,
+            TokenType.TOKEN_CCURLY,
+        ) ?: return null
+        
+        when (name.type) {
+            TokenType.TOKEN_CCURLY -> {
+                break
+            }
+            
+            TokenType.TOKEN_RETURN -> {
+                val token = expectToken(lexer, TokenType.TOKEN_NUMBER) ?: return null
+                block.add(RetStmt(token))
+            }
+            
+            TokenType.TOKEN_NAME -> {
+                val arglist = parseArgList(lexer) ?: return null
+                block.add(FuncallStmt(name, arglist))
+            }
+            
+            else -> exitProcess(69)
+        }
+        expectToken(lexer, TokenType.TOKEN_SCOLON) ?: return null
+        
+    }
+    return block
+}
+
+fun parseArgList(lexer: Lexer): List<Token>? {
+    expectToken(lexer, TokenType.TOKEN_OPAREN) ?: return null
+    val funArgs = mutableListOf<Token>()
+    
+    while (true) {
+        val token = expectToken(
+            lexer,
+            TokenType.TOKEN_NUMBER,
+            TokenType.TOKEN_STRING,
+            TokenType.TOKEN_NAME,
+            TokenType.TOKEN_CPAREN,
+            TokenType.TOKEN_COMMA
+        ) ?: return null
+        
+        when (token.type) {
+            TokenType.TOKEN_CPAREN -> break
+            TokenType.TOKEN_COMMA -> continue
+            else -> funArgs.add(token)
+        }
+    }
+    return funArgs
 }
 
 fun main() {
-    // test()
     val fileName = "hello.c"
     val lexer = Lexer.fromFile(fileName)
     
-    val func = parse_function(lexer)
+    val func = parseFunction(lexer) ?: error("Failed to compile $fileName")
+    
+    val compiledScript = mutableListOf<String>()
+    for (stmt in func.body) {
+        when (stmt.type) {
+            StatementType.Funcall -> {
+                val stmt = stmt as FuncallStmt
+                if (stmt.name.value == "printf") {
+                    compiledScript.add("print(${stmt.args.joinToString { it.valueToString() }})")
+                } else {
+                    println("${stmt.name.loc} ERROR: Call to unknown function: '${stmt.name.value}'")
+                    exitProcess(69)
+                }
+            }
+            
+            StatementType.Return -> {
+            
+            }
+        }
+    }
+    File("output.py").also { it.createNewFile() }.bufferedWriter().use { writer ->
+        writer.write(compiledScript.joinToString(separator = "\n") { it })
+    }
+    
 }
-
